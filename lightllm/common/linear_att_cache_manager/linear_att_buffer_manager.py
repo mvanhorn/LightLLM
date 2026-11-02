@@ -28,6 +28,7 @@ class LinearAttCacheManager:
             layer_num=self.linear_config.linear_layer_num,
             device="cpu",
             size_first=True,
+            cpu_allocator=self.linear_config.get_cpu_state_allocator(),
         )
         self.ssm_state_cache = LayerCache(
             size=self.size,
@@ -36,7 +37,9 @@ class LinearAttCacheManager:
             layer_num=self.linear_config.linear_layer_num,
             device="cpu",
             size_first=True,
+            cpu_allocator=self.linear_config.get_cpu_state_allocator(),
         )
+        self.extra_state_cache = self.linear_config.create_extra_state_cache(self.size)
         self.clear_to_init_state()
         return
 
@@ -79,5 +82,7 @@ class LinearAttCacheManager:
     def clear_to_init_state(self):
         self.conv_state_cache.buffer.zero_()
         self.ssm_state_cache.buffer.zero_()
+        if self.extra_state_cache is not None:
+            self.extra_state_cache.clear_to_init_state()
         self.free_list = collections.deque(range(self.size - self.keep_num))
         return

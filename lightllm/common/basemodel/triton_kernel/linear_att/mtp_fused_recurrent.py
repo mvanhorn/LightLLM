@@ -59,6 +59,7 @@ def _fused_recurrent_gated_delta_rule_fwd_kernel(
     stride_write_indices_tok: tl.constexpr,
     SOFTPLUS_BETA: tl.constexpr,
     SOFTPLUS_THRESHOLD: tl.constexpr,
+    MATCH_DECODE: tl.constexpr,
 ):
     i_v, i_n, i_hv = tl.program_id(0), tl.program_id(1), tl.program_id(2)
     i_h = i_hv // (HV // H)
@@ -123,6 +124,8 @@ def _fused_recurrent_gated_delta_rule_fwd_kernel(
         p_ht = ht + write_idx * stride_final_state_token
         p_ht = p_ht + i_hv * stride_state_hv + o_k[:, None] * V + o_v[None, :]
         tl.store(p_ht, b_h.to(p_ht.dtype.element_ty), mask=mask_h)
+        if MATCH_DECODE:
+            b_h = b_h.to(p_ht.dtype.element_ty).to(tl.float32)
 
         p_q += stride_q_tok
         p_k += stride_k_tok
@@ -150,6 +153,8 @@ def mtp_fused_recurrent_gated_delta_rule(
     dt_bias: torch.Tensor,
     a_raw: torch.Tensor,
     b_raw: torch.Tensor,
+    *,
+    match_decode: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Fused recurrent gated delta rule with fused gating (GDN layer).
 
@@ -170,6 +175,8 @@ def mtp_fused_recurrent_gated_delta_rule(
         dt_bias: ``[HV]`` per-head dt bias.
         a_raw: ``[T, HV]`` raw alpha.
         b_raw: ``[T, HV]`` raw beta.
+        match_decode: Match the single-token reduction layout and materialize
+            the configured state dtype after every token. Disabled by default.
 
     Returns:
         ``(o, final_state)`` where ``o`` is ``[1, T, HV, V]`` and
@@ -191,9 +198,10 @@ def mtp_fused_recurrent_gated_delta_rule(
     b_raw, stride_b_tok = _ensure_gate_token_strided(b_raw)
     BK = triton.next_power_of_2(K)
     assert K == BK, f"K={K} must be a power of 2"
-    BV = min(triton.next_power_of_2(V), 8)
-    num_warps = 1
-    num_stages = 3
+
+    BV = min(triton.next_power_of_2(V), 32 if match_decode else 8)
+    num_warps = 4 if match_decode else 1
+    num_stages = 1 if match_decode else 3
     NV = triton.cdiv(V, BV)
 
     o = q.new_empty(v.shape)
@@ -249,6 +257,7 @@ def mtp_fused_recurrent_gated_delta_rule(
         stride_write_indices_tok=stride_write_indices_tok,
         SOFTPLUS_BETA=1.0,
         SOFTPLUS_THRESHOLD=20.0,
+        MATCH_DECODE=match_decode,
         num_warps=num_warps,
         num_stages=num_stages,
     )

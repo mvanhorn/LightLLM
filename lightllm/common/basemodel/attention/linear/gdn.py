@@ -35,7 +35,6 @@ class LinearAttBackend(BaseAttBackend, ABC):
         pass
 
     def _init_linear_layer_metadata(self, network_config, tp_world_size):
-
         self.mtp_step = get_env_start_args().mtp_step
 
         # Linear attention specific dimensions
@@ -107,7 +106,6 @@ class LinearAttBackend(BaseAttBackend, ABC):
 
 @dataclasses.dataclass
 class LinearAttPrefillAttState(BasePrefillAttState):
-
     b_conv_buffer_idx: torch.Tensor = None
     b_ssm_buffer_idx: torch.Tensor = None
 
@@ -199,11 +197,11 @@ class LinearAttPrefillAttState(BasePrefillAttState):
 
 @dataclasses.dataclass
 class LinearAttDecodeAttState(BaseDecodeAttState):
-
     b_conv_buffer_idx: torch.Tensor = None
     b_ssm_buffer_idx: torch.Tensor = None
     b1_mtp_cu_q_seq_len: torch.Tensor = None
     b_num_accepted_tokens: torch.Tensor = None
+    b1_mtp_cu_q_seq_len_int64: torch.Tensor = None
 
     def init_state(self):
         draft_step = self.backend.model.mtp_manager.get_decode_draft_step(self.backend.model.is_mtp_draft_model)
@@ -213,6 +211,8 @@ class LinearAttDecodeAttState(BaseDecodeAttState):
             self._init_dynamic_mtp_decode_state(draft_step + 1)
         else:
             self._init_fixed_mtp_decode_state(draft_step)
+        if draft_step > 0:
+            self.b1_mtp_cu_q_seq_len_int64 = self.b1_mtp_cu_q_seq_len.to(torch.int64)
 
     def _init_normal_decode_state(self):
         self.b_conv_buffer_idx = self.infer_state.b_req_idx
@@ -393,7 +393,7 @@ class LinearAttDecodeAttState(BaseDecodeAttState):
             k=key,
             v=value,
             initial_state=ssm_states,
-            cu_seqlens=cu_seqlens_q.to(torch.long),
+            cu_seqlens=self.b1_mtp_cu_q_seq_len_int64,
             ssm_state_indices=self.b_ssm_buffer_idx,
             ssm_state_write_indices=self.b_ssm_buffer_idx,
             num_accepted_tokens=self.b_num_accepted_tokens,
@@ -401,5 +401,6 @@ class LinearAttDecodeAttState(BaseDecodeAttState):
             dt_bias=layer_weight.linear_dt_bias.weight,
             a_raw=a,
             b_raw=b,
+            match_decode=getattr(backend.model, "linear_att_mtp_match_decode", False),
         )
         return core_attn_out

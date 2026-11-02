@@ -23,7 +23,6 @@ logger = init_logger(__name__)
 
 
 class MemoryManager:
-
     operator_class = NormalMemOperator
 
     def __init__(self, size, dtype, head_num, head_dim, layer_num, always_copy=False, mem_fraction=0.9):
@@ -66,7 +65,7 @@ class MemoryManager:
         world_size = dist.get_world_size()
         available_memory = get_available_gpu_memory(world_size) - get_total_gpu_memory() * (1 - mem_fraction)
         cell_size = self.get_cell_size()
-        self.size = int(available_memory * 1024 ** 3 / cell_size)
+        self.size = int(available_memory * 1024**3 / cell_size)
         if world_size > 1:
             tensor = torch.tensor(self.size, dtype=torch.int64, device=f"cuda:{get_current_device_id()}")
             dist.all_reduce(tensor, op=dist.ReduceOp.MIN)
@@ -216,7 +215,8 @@ class MemoryManager:
             node_world_size = get_node_world_size()
             shm_name = f"{get_unique_server_name()}_mem_manager_{get_current_rank_in_node()}"
             obj_bytes_array = [ForkingPickler.dumps(self).tobytes() for _ in range(node_world_size * 2)]
-            obj_size = len(obj_bytes_array[0])
+
+            obj_size = max(map(len, obj_bytes_array))
             shm = create_or_link_shm(
                 name=shm_name, expected_size=obj_size * (node_world_size * 2) + 4 + 4, force_mode="create"
             )
@@ -225,7 +225,7 @@ class MemoryManager:
             shm.buf[4:8] = obj_size.to_bytes(4, "little")
             start_index = 8
             for obj_bytes in obj_bytes_array:
-                shm.buf[start_index : start_index + obj_size] = obj_bytes
+                shm.buf[start_index : start_index + obj_size] = obj_bytes.ljust(obj_size, b"\0")
                 start_index += obj_size
 
     @staticmethod

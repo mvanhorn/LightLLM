@@ -3,7 +3,7 @@ import time
 import numpy as np
 import dataclasses
 import torch
-from typing import List
+from typing import List, Optional
 from lightllm.common.kv_cache_mem_manager import MemoryManager
 from lightllm.utils.envs_utils import get_unique_server_name, get_env_start_args
 from lightllm.utils.dist_utils import get_dp_rank_in_node
@@ -71,6 +71,12 @@ class DPKVSharedMoudle:
             # 计算需要传输的 kv 长度， 不能超过 req.get_cur_total_len() - 1
             trans_size = min(max_req_radix_cache_len, req.get_cur_total_len() - 1) - req.cur_kv_len
 
+            request_transfer = getattr(
+                self.backend.model.mem_manager.operator, "copy_requests_from_other_dp_ranks", None
+            )
+            if request_transfer is not None and req.cur_kv_len + trans_size != max_req_radix_cache_len:
+                continue
+
             if is_current_dp_handle and trans_size > 0 and g_infer_context.get_can_alloc_token_num() > trans_size:
                 g_infer_context.radix_cache.free_radix_cache_to_get_enough_token(trans_size)
                 mem_indexes = self.backend.model.mem_manager.alloc(trans_size)
@@ -88,6 +94,8 @@ class DPKVSharedMoudle:
                         max_kv_len_dp_rank=int(max_kv_len_dp_rank),
                         max_kv_len_mem_manager_index=int(max_kv_len_mem_manager_index),
                         max_kv_len_mem_indexes=max_kv_len_mem_indexes,
+                        source_req_idx=max_kv_len_req_idx,
+                        source_kv_len=int(max_req_radix_cache_len),
                     )
                 )
 
@@ -96,8 +104,18 @@ class DPKVSharedMoudle:
     def kv_trans(self, trans_tasks: List["TransTask"]):
         from lightllm.server.router.model_infer.infer_batch import g_infer_context
 
-        # kv 传输
-        if len(trans_tasks) > 0:
+        request_transfer = getattr(self.backend.model.mem_manager.operator, "copy_requests_from_other_dp_ranks", None)
+        if request_transfer is not None:
+            request_transfer(
+                trans_tasks,
+                self.backend.mem_managers,
+                self.backend.dp_size_in_node,
+                self.backend.rank_in_dp,
+            )
+
+            torch.cuda.current_stream().synchronize()
+            dist.barrier(group=self.backend.node_nccl_group)
+        elif len(trans_tasks) > 0:
             max_kv_len_mem_indexes = []
             max_kv_len_dp_ranks = []
             mem_indexes = []
@@ -137,3 +155,5 @@ class TransTask:
     max_kv_len_dp_rank: int
     max_kv_len_mem_manager_index: int
     max_kv_len_mem_indexes: torch.Tensor
+    source_req_idx: Optional[int] = None
+    source_kv_len: Optional[int] = None

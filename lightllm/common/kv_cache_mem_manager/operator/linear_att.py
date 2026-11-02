@@ -24,6 +24,15 @@ class LinearAttMemOperator(BaseMemManagerOperator):
         super().__init__(mem_manager)
         self.linear_config = LinearAttCacheConfig.load_from_args()
 
+    def load_extra_cpu_cache(self, mem_indexes, state_indexes, page_indexes, cpu_cache_tensor):
+        return
+
+    def offload_extra_cpu_cache(self, mem_indexes, state_indexes, page_indexes, page_readies, cpu_cache_tensor):
+        return
+
+    def copy_extra_prefix_state(self, source_pool, source_index, destination_pool, destination_index):
+        return
+
     def load_cpu_cache_to_gpu(
         self,
         mem_indexes: torch.Tensor,
@@ -88,6 +97,10 @@ class LinearAttMemOperator(BaseMemManagerOperator):
             tp_world_size=get_dp_world_size(),
             big_page_token_num=args.cpu_cache_token_page_size,
             linear_config=self.linear_config,
+        )
+
+        self.load_extra_cpu_cache(
+            mem_indexes, big_page_buffer_ids_gpu, page_indexes, cpu_cache_client.cpu_kv_cache_tensor
         )
 
         from lightllm.server.router.model_infer.infer_batch import g_infer_context
@@ -158,6 +171,12 @@ class LinearAttMemOperator(BaseMemManagerOperator):
                 dst_conv_state=dst_conv_state,
                 dst_ssm_state=dst_ssm_state,
             )
+            self.copy_extra_prefix_state(
+                g_infer_context.radix_cache.linear_att_small_page_buffers,
+                req.tail_linear_att_small_page_buffer_id,
+                mem_manager.linear_att_big_page_buffers,
+                mem_manager.CPU_CACHE_BIG_PAGE_OFFLOAD_TEMP_BUFFER_ID,
+            )
             big_page_buffer_ids_cpu.append(mem_manager.CPU_CACHE_BIG_PAGE_OFFLOAD_TEMP_BUFFER_ID)
 
         assert len(big_page_buffer_ids_cpu) == len(page_indexes) == len(page_readies)
@@ -186,6 +205,9 @@ class LinearAttMemOperator(BaseMemManagerOperator):
             tp_world_size=get_dp_world_size(),
             big_page_token_num=args.cpu_cache_token_page_size,
             linear_config=self.linear_config,
+        )
+        self.offload_extra_cpu_cache(
+            mem_indexes, big_page_buffer_ids_gpu, page_indexes, page_readies, cpu_cache_client.cpu_kv_cache_tensor
         )
         return
 

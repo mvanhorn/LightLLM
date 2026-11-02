@@ -34,8 +34,10 @@ from lightllm.utils.log_utils import init_logger
 from lightllm.server.metrics.manager import MetricClient
 from .rl_controller import HttpRlController
 from .manager_ext import HttpRlManagerHelper
+from lightllm.common.basemodel.multimodal_tokenizer import BaseMultiModalTokenizer
 from lightllm.utils.statics_utils import MovingAverage
 from lightllm.utils.config_utils import get_vocab_size
+from .slot_availability import RequestSlotAvailability
 from lightllm.utils.envs_utils import (
     get_pd_node_router_wait_timeout_seconds,
     get_pd_node_shm_req_alloc_timeout_seconds,
@@ -59,6 +61,9 @@ class HttpServerManager(HttpRlManagerHelper, object):
         args: StartArgs,
     ):
         self.args: StartArgs = args
+        self._request_slot_availability = RequestSlotAvailability.from_args(args)
+        if self._request_slot_availability.enabled:
+            logger.info("HTTP request slot release notifications enabled")
         ports = get_shm_port_args()
         context = zmq.asyncio.Context(2)
         self.send_to_router = context.socket(zmq.PUSH)
@@ -289,6 +294,10 @@ class HttpServerManager(HttpRlManagerHelper, object):
             audio_count += 1
             self.tokenizer.init_audioitem_extral_params(audio, multimodal_params, samping_params)
             audio_tokens += self.tokenizer.get_audio_token_length(audio)
+        if isinstance(self.tokenizer, BaseMultiModalTokenizer):
+            return self.tokenizer.count_prompt_tokens(
+                len(prompt_ids), image_tokens, img_count, audio_tokens, audio_count
+            )
         return len(prompt_ids) + image_tokens + img_count + audio_tokens + audio_count
 
     async def loop_for_request(self):
@@ -339,7 +348,6 @@ class HttpServerManager(HttpRlManagerHelper, object):
         # 用于等待 pd_master 下发的交换信息
         pd_event: asyncio.Event = None,
     ) -> AsyncGenerator[Tuple[int, str, dict, FinishStatus], None]:
-
         start_time = time.time()
         request_headers = request.headers if request is not None else {}
         group_request_id = self.alloc_req_id(sampling_params)
@@ -566,6 +574,7 @@ class HttpServerManager(HttpRlManagerHelper, object):
         超时时间；高优先级请求取本地超时与 PD Master 下发值中的较大值。
         """
         alloced_req_indexes = []
+        slot_availability = getattr(self, "_request_slot_availability", None)
         alloc_timeout_seconds = None
         if self.pd_node_request_limit_enabled:
             alloc_timeout_seconds = self.pd_node_shm_req_alloc_timeout_seconds
@@ -578,6 +587,7 @@ class HttpServerManager(HttpRlManagerHelper, object):
 
         try:
             while len(alloced_req_indexes) < req_num:
+                release_generation = slot_availability.generation if slot_availability is not None else 0
                 alloc_req_index = await self.shm_req_manager.async_alloc_req_index()
                 # 保持相同的退避起点，仅通过系数让高优先级请求更快地重新尝试获取 shm_req。
                 sleep_time_factor = 0.2 if pd_high_priority_request else 1
@@ -592,8 +602,12 @@ class HttpServerManager(HttpRlManagerHelper, object):
                             f"PD {self.args.run_mode} node is busy: unable to allocate a shm_req object "
                             f"within {alloc_timeout_seconds} seconds"
                         )
-                    await asyncio.sleep(sleep_time * sleep_time_factor)
+                    if slot_availability is None:
+                        await asyncio.sleep(sleep_time * sleep_time_factor)
+                    else:
+                        await slot_availability.wait(release_generation, sleep_time * sleep_time_factor)
                     sleep_time = min(1, sleep_time * 1.1)
+                    release_generation = slot_availability.generation if slot_availability is not None else 0
                     alloc_req_index = await self.shm_req_manager.async_alloc_req_index()
                 alloced_req_indexes.append(alloc_req_index)
             return alloced_req_indexes
@@ -601,7 +615,13 @@ class HttpServerManager(HttpRlManagerHelper, object):
             # 批量申请中途失败时，释放已申请的索引，避免 shm_req 资源泄漏。
             for req_index in alloced_req_indexes:
                 await self.shm_req_manager.async_release_req_index(req_index)
+                self._notify_req_slot_release()
             raise
+
+    def _notify_req_slot_release(self):
+        slot_availability = getattr(self, "_request_slot_availability", None)
+        if slot_availability is not None:
+            slot_availability.notify_release()
 
     async def _log_req_header(self, request_headers, group_request_id: int):
         x_request_id = request_headers.get("X-Request-Id", "")
@@ -743,7 +763,6 @@ class HttpServerManager(HttpRlManagerHelper, object):
         self,
         group_req_objs: Optional[GroupReqObjs] = None,
     ):
-
         if self.pd_mode.is_P_or_NORMAL():
             if not self.args.disable_vision:
                 self.send_to_visual.send_pyobj(group_req_objs.to_group_req_index(), protocol=pickle.HIGHEST_PROTOCOL)
@@ -786,7 +805,6 @@ class HttpServerManager(HttpRlManagerHelper, object):
         req_status: "ReqStatus",
         request: Request,
     ):
-
         event = req_status.event
         unfinished_count = sampling_params.best_of
         out_token_counter = 0
@@ -976,6 +994,7 @@ class HttpServerManager(HttpRlManagerHelper, object):
                     logger.debug(f"httpserver release req_id {req.request_id}, index {req.index_in_shm_mem}")
                     await self.shm_req_manager.async_put_back_req_obj(req)
                     await self.shm_req_manager.async_release_req_index(req.index_in_shm_mem)
+                    self._notify_req_slot_release()
                 await self._release_multimodal_resources(req_status.group_req_objs.multimodal_params)
 
             # 先保留这个关键得日志，用于方便定位重构中的问题。

@@ -175,6 +175,8 @@ def auto_set_fused_shared_experts(args) -> None:
         "qwen3_5_text",
         "qwen3_5_moe",
         "qwen3_5_moe_text",
+        "qwen4_exp",
+        "qwen4_exp_text",
     }
     if model_type not in supported_model_types:
         logger.info(f"do not enable fused shared experts: unsupported model_type={model_type}")
@@ -274,13 +276,12 @@ def get_eos_token_ids(model_path: str) -> Optional[List[int]]:
     except:
         pass
 
-    # Qwen3.5 checkpoints can have an eos_token_id in config that differs from
     # tokenizer.eos_token_id. In practice tokenizer.eos_token_id is the reliable
     # stop id (<|im_end|>, <|endoftext|>) for detokenization/stop behavior.
     try:
         config_json = get_config_json(model_path)
         model_type = config_json.get("model_type") or config_json.get("text_config", {}).get("model_type")
-        if model_type in {"qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text"}:
+        if model_type in {"qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text", "qwen4_exp", "qwen4_exp_text"}:
             from transformers import AutoTokenizer
 
             eos_token_ids = []
@@ -417,6 +418,8 @@ def has_vision_module(model_path: str) -> bool:
         ):
             # Qwen3OmniMoeVisionTransformerPretrainedModel
             return True
+        elif model_type == "qwen4_exp":
+            return model_cfg.get("vision_config") is not None
         elif model_type in ["qwen3_5", "qwen3_5_moe"]:
             return True
         else:
@@ -456,7 +459,7 @@ def is_linear_att_mixed_model(model_path: str) -> bool:
 
         model_cfg, _ = PretrainedConfig.get_config_dict(model_path)
         model_type = model_cfg["model_type"]
-        if model_type in ["qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text"]:
+        if model_type in ["qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text", "qwen4_exp", "qwen4_exp_text"]:
             return True
         else:
             return False

@@ -78,6 +78,9 @@ class ReqManager:
     def alloc(self):
         return self.req_list.alloc()
 
+    def commit_speculative_state(self, requests, starts, accepted_lengths):
+        return
+
     def free(self, free_req_indexes: List[int], free_token_index):
         for req_index in free_req_indexes:
             self.req_list.free(req_index)
@@ -293,6 +296,9 @@ class ReqManagerForMamba(ReqManager):
         conv_states = self.req_to_conv_state.buffer[layer_idx_in_linear]
         ssm_states = self.req_to_ssm_state.buffer[layer_idx_in_linear]
         return conv_states, ssm_states
+
+    def copy_extra_state_to_prefix_cache(self, requests, destinations, prefix_cache):
+        return
 
     def copy_big_page_buffer_to_linear_att_state(self, big_page_buffer_idx: int, req: "InferReq"):
         from .linear_att_cache_manager import LinearAttCacheManager

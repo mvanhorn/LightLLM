@@ -32,6 +32,12 @@ class LinearAttCacheConfig:
     all_layer_num: int  # 包括 linear att 和 full att 的层加起来的层数
     draft_full_att_kv_layer_num: int = 0
 
+    def get_cpu_state_allocator(self):
+        return None
+
+    def create_extra_state_cache(self, size):
+        return None
+
     def get_conv_dim(self):
         # 第一项对应q的参数，第二项对应k的参数，第三项对应v的参数
         # 由于 k_dim = q_dim, k_heads = q_heads, 所以第一项和第二项的计算
@@ -113,6 +119,16 @@ class LinearAttCacheConfig:
 
         model_cfg, _ = PretrainedConfig.get_config_dict(model_path)
         model_type = model_cfg["model_type"]
+        if model_type in ("qwen4_exp", "qwen4_exp_text"):
+            from lightllm.models.qwen4_exp.configuration import linear_cache_config
+
+            return linear_cache_config(
+                model_cfg.get("text_config", model_cfg),
+                args.tp // args.dp,
+                get_torch_dtype(args.data_type),
+                get_torch_dtype(args.linear_att_ssm_data_type),
+                draft_layers=get_added_mtp_kv_layer_num(),
+            )
         assert model_type in ["qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text"]
         llm_config = model_cfg
         try:

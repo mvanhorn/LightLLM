@@ -15,6 +15,7 @@ class LayerCache:
         layer_num: int,
         device: torch.device,
         size_first: bool = False,
+        cpu_allocator=None,
     ):
         self.size_first = size_first
         self.size = size
@@ -22,14 +23,15 @@ class LayerCache:
         self.shape = shape
         self.layer_num = layer_num
         self.device = device
+        cpu_zeros = torch.zeros if cpu_allocator is None else cpu_allocator
         if not self.size_first:
             if device == "cpu":
-                self.buffer = torch.zeros((self.layer_num, size, *shape), dtype=dtype, device="cpu", pin_memory=True)
+                self.buffer = cpu_zeros((self.layer_num, size, *shape), dtype=dtype, device="cpu", pin_memory=True)
             else:
                 self.buffer = torch.zeros((self.layer_num, size, *shape), dtype=dtype, device=device)
         else:
             if device == "cpu":
-                self.buffer = torch.zeros((size, self.layer_num, *shape), dtype=dtype, device="cpu", pin_memory=True)
+                self.buffer = cpu_zeros((size, self.layer_num, *shape), dtype=dtype, device="cpu", pin_memory=True)
             else:
                 self.buffer = torch.zeros((size, self.layer_num, *shape), dtype=dtype, device=device)
 

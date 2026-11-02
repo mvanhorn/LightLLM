@@ -58,6 +58,7 @@ def verify_mtp_tokens(
             accepted_index=accepted_index,
             verify_width=backend.max_draft_step + 1,
         )
+    backend.model.req_manager.commit_speculative_state(b_req_idx, b_req_mtp_start_loc, accept_lengths)
     return accept_lengths, accepted_index
 
 

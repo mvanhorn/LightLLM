@@ -348,7 +348,6 @@ class InferenceContext:
     @torch.no_grad()
     def pause_reqs(self, pause_reqs: List["InferReq"], is_master_in_dp: bool):
         if pause_reqs:
-
             free_token_index = []
             for req in pause_reqs:
                 if self.args.diverse_mode:
@@ -369,7 +368,6 @@ class InferenceContext:
 
     def recover_paused_reqs(self, paused_reqs: List["InferReq"], is_master_in_dp: bool, can_alloc_token_num: int):
         if paused_reqs:
-
             for req in paused_reqs:
                 prefill_need_token_num = req.get_cur_total_len()
                 if prefill_need_token_num > can_alloc_token_num:
@@ -436,6 +434,10 @@ class InferenceContext:
                 mtp_step=self.args.mtp_step,
             )
 
+            self.req_manager.copy_extra_state_to_prefix_cache(
+                b_req_idx, big_page_buffer_ids, self.radix_cache.linear_att_big_page_buffers
+            )
+
         assert not self.args.disable_chunked_prefill, "chunked prefill mode must be enabled for linear att mixed model"
 
         # tail small page 的linear att 状态的存储
@@ -464,6 +466,9 @@ class InferenceContext:
                         # TODO 对于非连续对象调用 copy_ 效率并不高
                         dst_conv_state.copy_(gpu_conv_state, non_blocking=True)
                         dst_ssm_state.copy_(gpu_ssm_state, non_blocking=True)
+                        self.req_manager.copy_extra_state_to_prefix_cache(
+                            [req.req_idx], [dst_buffer_idx], self.radix_cache.linear_att_small_page_buffers
+                        )
         return
 
 
